@@ -1,7 +1,8 @@
 import pandas as pd
+import streamlit as st
 
 
-# TODO: adicionar @st.cache_data (import streamlit as st) para evitar reler o CSV a cada interação
+@st.cache_data(show_spinner="Carregando dados...")
 def load_data(path="data/clean/dataset.csv"):
-    """Lê o dataset já tratado (exportado ao final do notebook de EDA)."""
-    return pd.read_csv(path)
+    """Lê o dataset já tratado (exportado na última célula de notebooks/eda.ipynb)."""
+    return pd.read_csv(path, parse_dates=["data_compra"])
