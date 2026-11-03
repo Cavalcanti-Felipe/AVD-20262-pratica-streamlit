@@ -275,7 +275,155 @@ with aba_lab:
 # ---------------------------------------------------------------------------
 # Dashboard 2: KPIs para a Gerência de Logística
 # ---------------------------------------------------------------------------
+FAIXAS_DIAS = [0, 5, 10, 15, 20, 30, 45, 1000]
+ROTULOS_DIAS = ["0–5", "6–10", "11–15", "16–20", "21–30", "31–45", "45+"]
+
+
+def kpis_logistica(dados):
+    """Métricas do Dashboard 2, calculadas sobre os pedidos entregues."""
+    ent = dados[dados["dias_entrega"].notna()]
+    return {
+        "pct_no_prazo": (1 - ent["atrasado"].mean()) * 100,
+        "prazo_medio": ent["dias_entrega"].mean(),
+        "folga_media": (ent["dias_prometidos"] - ent["dias_entrega"]).mean(),
+        "frete_sobre_valor": dados["valor_frete"].sum() / dados["valor_pago"].sum() * 100,
+        "nota_atrasados": ent.loc[ent["atrasado"] == 1, "review_score"].mean(),
+        "nota_no_prazo": ent.loc[ent["atrasado"] == 0, "review_score"].mean(),
+    }
+
+
+def ufs_clicadas():
+    """Estados clicados no gráfico por UF (seleção do Altair guardada pelo Streamlit no session_state)."""
+    estado = st.session_state.get("grafico_uf")
+    if not estado:
+        return []
+    itens = estado.get("selection", {}).get("uf_clicada", [])
+    return sorted({item["uf"] for item in itens if "uf" in item})
+
+
 with aba_kpi:
-    st.subheader("KPIs de Logística")
-    st.info("Em construção (entrega 3).")
-    # TODO: 5 métricas (st.metric) e 3 visuais em Altair para a Gerência de Logística
+    st.subheader("KPIs de Logística · público-alvo: Gerência de Logística / Operações")
+    st.caption(
+        "Pergunta da gerência: **estamos entregando no prazo, onde falhamos e quanto isso custa em satisfação?** "
+        "Valem os filtros de nota e região da barra lateral (o corte de outliers é só do Dashboard 1, "
+        "para não esconder os piores atrasos)."
+    )
+
+    # ignora estados clicados que saíram do filtro da sidebar (ex.: trocou a região depois de clicar)
+    ufs_sel = [uf for uf in ufs_clicadas() if uf in set(df_base["uf"])]
+    df_sel = df_base[df_base["uf"].isin(ufs_sel)] if ufs_sel else df_base
+    if ufs_sel:
+        st.info(f"Filtrando pelos estados clicados no gráfico: **{', '.join(ufs_sel)}**. "
+                "Clique numa área vazia do gráfico por estado para limpar.")
+
+    if df_sel["dias_entrega"].notna().sum() == 0:
+        st.warning("Nenhum pedido entregue com esses filtros. Amplie o intervalo de nota ou as regiões.")
+    else:
+        k, geral = kpis_logistica(df_sel), kpis_logistica(df)
+        filtrado = len(df_sel) < len(df)
+
+        def delta(chave, casas=1, sufixo=""):
+            return f"{fmt(k[chave] - geral[chave], casas, sufixo)} vs. total" if filtrado else None
+
+        # --- Métricas (5)
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Entregas no prazo", fmt(k["pct_no_prazo"], 1, " %"), delta("pct_no_prazo", 1, " p.p."),
+                  help="% dos pedidos entregues até a data prometida.")
+        m2.metric("Prazo médio de entrega", fmt(k["prazo_medio"], 1, " dias"), delta("prazo_medio", 1, " d"),
+                  delta_color="inverse", help="Dias entre a compra e a entrega ao cliente.")
+        m3.metric("Folga média do prazo", fmt(k["folga_media"], 1, " dias"), delta("folga_media", 1, " d"),
+                  help="Prazo prometido − prazo real. Quanto maior, mais 'colchão' a Olist dá na promessa.")
+        m4.metric("Frete / valor pago", fmt(k["frete_sobre_valor"], 1, " %"), delta("frete_sobre_valor", 1, " p.p."),
+                  delta_color="inverse", help="Quanto do dinheiro pago pelo cliente vai para o frete.")
+        m5.metric("Nota dos atrasados", fmt(k["nota_atrasados"], 2, " ★"),
+                  f"{fmt(k['nota_atrasados'] - k['nota_no_prazo'], 2)} vs. no prazo",
+                  help="Nota média dos pedidos atrasados, comparada com a dos entregues no prazo.")
+
+        ent = df_sel[df_sel["dias_entrega"].notna()]
+
+        # --- Visual 1: % de atraso por mês
+        mensal = (ent.groupby("ano_mes")
+                     .agg(pct_atraso=("atrasado", "mean"), pedidos=("atrasado", "size"))
+                     .assign(pct_atraso=lambda x: x["pct_atraso"] * 100)
+                     .reset_index())
+        media_periodo = 100 - k["pct_no_prazo"]
+        linha = alt.Chart(mensal).mark_line(point=True, color=COR_ATRASADO, strokeWidth=2.5).encode(
+            x=alt.X("ano_mes:O", title=None, axis=alt.Axis(labelAngle=-45)),
+            y=alt.Y("pct_atraso:Q", title="% de entregas atrasadas"),
+            tooltip=[alt.Tooltip("ano_mes:O", title="mês"),
+                     alt.Tooltip("pct_atraso:Q", title="% atrasadas", format=".1f"),
+                     alt.Tooltip("pedidos:Q", title="pedidos entregues", format=",")],
+        )
+        media = alt.Chart(pd.DataFrame({"y": [media_periodo]})).mark_rule(strokeDash=[6, 4], color="#555555").encode(
+            y="y:Q", tooltip=alt.Tooltip("y:Q", title="média do período (%)", format=".1f"))
+        st.altair_chart(
+            (linha + media).properties(title="Quando falhamos: % de entregas atrasadas por mês", height=320),
+            width="stretch", alt="Linha com o percentual de entregas atrasadas por mês",
+        )
+        st.caption("Picos de atraso na Black Friday (nov/2017) e em fev–mar/2018: a operação não acompanha os picos de demanda. "
+                   "A linha tracejada é a média do período.")
+
+        col_uf, col_nota = st.columns(2, gap="large")
+
+        # --- Visual 2: desempenho por UF (clique filtra as métricas e os outros gráficos)
+        with col_uf:
+            metrica_uf = st.selectbox("Métrica por estado", ["% de atraso", "Prazo médio (dias)", "Frete médio (R$)"])
+            col = {"% de atraso": "pct_atraso", "Prazo médio (dias)": "prazo", "Frete médio (R$)": "frete"}[metrica_uf]
+            por_uf = (df_base.groupby("uf")
+                             .agg(pct_atraso=("atrasado", "mean"), prazo=("dias_entrega", "mean"),
+                                  frete=("valor_frete", "mean"), pedidos=("uf", "size"))
+                             .assign(pct_atraso=lambda x: x["pct_atraso"] * 100)
+                             .dropna(subset=[col])
+                             .reset_index())
+            clique = alt.selection_point(name="uf_clicada", fields=["uf"])
+            barras_uf = alt.Chart(por_uf).mark_bar(color=COR_PRINCIPAL).encode(
+                x=alt.X(f"{col}:Q", title=metrica_uf),
+                y=alt.Y("uf:N", title=None, sort="-x"),
+                opacity=alt.condition(clique, alt.value(1), alt.value(0.3)),
+                tooltip=[alt.Tooltip("uf:N", title="UF"),
+                         alt.Tooltip(f"{col}:Q", title=metrica_uf, format=",.1f"),
+                         alt.Tooltip("pedidos:Q", title="pedidos", format=",")],
+            ).add_params(clique).properties(
+                title="Onde falhamos: por estado (clique para filtrar)", height=max(380, 17 * len(por_uf)))
+            st.altair_chart(barras_uf, key="grafico_uf", on_select="rerun", width="stretch",
+                            alt="Barras por estado; clicar num estado filtra as métricas e os outros gráficos")
+
+        # --- Visual 3: nota média × dias até a entrega
+        with col_nota:
+            e = ent[ent["review_score"].notna()]
+            faixa = pd.cut(e["dias_entrega"], FAIXAS_DIAS, labels=ROTULOS_DIAS, include_lowest=True)
+            npp = (e.groupby(faixa, observed=False)
+                    .agg(nota=("review_score", "mean"), pedidos=("review_score", "size"))
+                    .rename_axis("faixa").reset_index()
+                    .astype({"faixa": str})
+                    .dropna(subset=["nota"]))
+            base_npp = alt.Chart(npp).encode(
+                x=alt.X("faixa:O", title="dias até a entrega", sort=ROTULOS_DIAS, axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("nota:Q", title="nota média", scale=alt.Scale(domain=[1, 5])),
+                tooltip=[alt.Tooltip("faixa:O", title="dias"), alt.Tooltip("nota:Q", title="nota média", format=".2f"),
+                         alt.Tooltip("pedidos:Q", title="pedidos", format=",")],
+            )
+            curva = base_npp.mark_line(point=True, color=COR_PRINCIPAL, strokeWidth=2.5)
+            rotulos = base_npp.mark_text(dy=-12, fontSize=12).encode(text=alt.Text("nota:Q", format=".1f"))
+            st.markdown("&nbsp;")  # alinha com o selectbox da coluna ao lado
+            st.altair_chart((curva + rotulos).properties(title="Quanto custa: nota média × dias até a entrega", height=380),
+                            width="stretch", alt="Linha da nota média por faixa de dias até a entrega")
+
+            mesmo = (ent.dropna(subset=["uf_vendedor_principal"])
+                        .assign(origem=lambda x: x["mesmo_estado"].map({True: "Mesmo estado", False: "Outro estado"}))
+                        .groupby("origem").agg(atraso=("atrasado", "mean"), prazo=("dias_entrega", "mean")))
+            if len(mesmo) == 2:
+                st.caption(
+                    f"Vendedor no **mesmo estado** do cliente: prazo médio {fmt(mesmo.loc['Mesmo estado', 'prazo'])} dias "
+                    f"e {fmt(mesmo.loc['Mesmo estado', 'atraso'] * 100)} % de atraso, contra "
+                    f"{fmt(mesmo.loc['Outro estado', 'prazo'])} dias e {fmt(mesmo.loc['Outro estado', 'atraso'] * 100)} % "
+                    "quando o vendedor é de outro estado."
+                )
+
+        with st.expander("💡 Recomendações para a gerência"):
+            st.markdown(
+                "- **Reforçar a operação antes dos picos** (Black Friday, Natal, início do ano): é quando o atraso dispara.\n"
+                "- **Atrair vendedores fora de SP** (principalmente N/NE): vendedor no mesmo estado entrega em metade do tempo.\n"
+                "- **Monitorar pedidos acima de ~20 dias:** a partir daí a nota cai rápido; vale avisar o cliente antes.\n"
+                "- **Revisar a promessa de prazo por estado:** onde a folga do prazo é pequena, o atraso aparece."
+            )
