@@ -29,6 +29,13 @@ VARS_QUANT = {
 PADRAO = ["valor_pago", "valor_frete", "peso_total_g", "dias_entrega", "dias_atraso", "review_score"]
 REGIOES = ["Sudeste", "Sul", "Centro-Oeste", "Nordeste", "Norte"]
 
+# Passo de cada slider de intervalo (variáveis de contagem andam de 1 em 1)
+PASSO_SLIDER = {
+    "valor_pago": 10.0, "valor_produtos": 10.0, "valor_frete": 1.0,
+    "n_itens": 1, "parcelas": 1, "peso_total_g": 100.0,
+    "dias_entrega": 1.0, "dias_prometidos": 1.0, "dias_atraso": 1.0,
+}
+
 COR_PRINCIPAL = "#1f5fbf"
 COR_NO_PRAZO = "#1baf7a"
 COR_ATRASADO = "#e34948"
@@ -79,6 +86,28 @@ with st.sidebar:
         help="Exclui da análise os pedidos com nota fora do intervalo. Ex.: (1, 2) mostra só clientes insatisfeitos.",
     )
 
+    # Um slider de intervalo para cada variável quantitativa selecionada (a nota já tem o slider acima)
+    intervalos = {}
+    sliders_vars = [v for v in variaveis if v != "review_score"]
+    if sliders_vars:
+        st.markdown("**Intervalo das variáveis**")
+    for var in sliders_vars:
+        passo = PASSO_SLIDER[var]
+        if isinstance(passo, int):
+            minimo, maximo = int(df[var].min()), int(df[var].max())
+        else:
+            minimo = float(np.floor(df[var].min() / passo) * passo)
+            maximo = float(np.ceil(df[var].max() / passo) * passo)
+        intervalos[var] = st.slider(
+            nome(var),
+            min_value=minimo,
+            max_value=maximo,
+            value=(minimo, maximo),
+            step=passo,
+            key=f"intervalo_{var}",
+            help="Exclui da análise os pedidos fora do intervalo escolhido (vale para as duas abas).",
+        )
+
     corte_outlier = st.slider(
         "Remover outliers acima do percentil",
         min_value=90,
@@ -99,12 +128,20 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Aplicação dos filtros
 # ---------------------------------------------------------------------------
-# Filtros comuns às duas abas: nota e região
+# Filtros comuns às duas abas: nota, região e intervalos das variáveis
 df_base = df
 if faixa_nota != (1, 5):
     df_base = df_base[df_base["review_score"].between(*faixa_nota)]
 if regioes:
     df_base = df_base[df_base["regiao"].isin(regioes)]
+# Intervalos das variáveis: só filtra a variável cujo slider saiu do intervalo completo
+vars_ajustadas = []
+for var, (inicio, fim) in intervalos.items():
+    passo = PASSO_SLIDER[var]
+    completo = inicio <= df[var].min() and fim >= df[var].max() - (0 if isinstance(passo, int) else 1e-9)
+    if not completo:
+        df_base = df_base[df_base[var].between(inicio, fim)]
+        vars_ajustadas.append(nome(var))
 
 # Dashboard 1 também corta os outliers das variáveis selecionadas
 df_filtrado = df_base
@@ -117,7 +154,7 @@ if corte_outlier < 100:
 
 st.sidebar.caption(f"**{fmt(len(df_filtrado), 0)}** de {fmt(len(df), 0)} pedidos no Dashboard 1")
 
-aba_lab, aba_kpi = st.tabs([" Dashboard 1 · Laboratório", " Dashboard 2 · KPIs de Logística"])
+aba_lab, aba_kpi = st.tabs(["Dashboard 1 · Laboratório", "Dashboard 2 · KPIs de Logística"])
 
 # ---------------------------------------------------------------------------
 # Dashboard 1: laboratório de distribuição e correlação
@@ -176,11 +213,12 @@ with aba_lab:
     st.caption(
         f"{fmt(len(df_filtrado), 0)} de {fmt(len(df), 0)} pedidos dentro dos filtros · "
         f"nota entre {faixa_nota[0]} e {faixa_nota[1]} · "
+        + (f"intervalo ajustado em: {', '.join(vars_ajustadas)} · " if vars_ajustadas else "")
         + (f"outliers acima do p{corte_outlier} removidos" if corte_outlier < 100 else "sem corte de outliers")
     )
 
     if df_filtrado.empty:
-        st.warning("Nenhum pedido com esses filtros. Amplie o intervalo de nota ou as regiões.")
+        st.warning("Nenhum pedido com esses filtros. Amplie os intervalos ou as regiões.")
     elif not variaveis:
         st.info("Selecione pelo menos uma variável na barra lateral.")
     else:
@@ -304,7 +342,7 @@ with aba_kpi:
     st.subheader("KPIs de Logística · público-alvo: Gerência de Logística / Operações")
     st.caption(
         "Pergunta da gerência: **estamos entregando no prazo, onde falhamos e quanto isso custa em satisfação?** "
-        "Valem os filtros de nota e região da barra lateral (o corte de outliers é só do Dashboard 1, "
+        "Valem os filtros de nota, região e intervalos das variáveis da barra lateral (o corte de outliers é só do Dashboard 1, "
         "para não esconder os piores atrasos)."
     )
 
@@ -316,7 +354,7 @@ with aba_kpi:
                 "Clique numa área vazia do gráfico por estado para limpar.")
 
     if df_sel["dias_entrega"].notna().sum() == 0:
-        st.warning("Nenhum pedido entregue com esses filtros. Amplie o intervalo de nota ou as regiões.")
+        st.warning("Nenhum pedido entregue com esses filtros. Amplie os intervalos ou as regiões.")
     else:
         k, geral = kpis_logistica(df_sel), kpis_logistica(df)
         filtrado = len(df_sel) < len(df)
