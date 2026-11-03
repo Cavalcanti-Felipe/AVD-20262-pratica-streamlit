@@ -1,173 +1,281 @@
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
 from src.data_loader import load_data
 
 st.set_page_config(
-    page_title="Avaliação de Correlação entre Variáveis Quantitativas do Heart Disease Dataset",
+    page_title="Olist · Distribuição, Correlação e KPIs de Logística",
+    page_icon="📦",
     layout="wide",
 )
 
-st.title("Avaliação de Correlação entre Variáveis Quantitativas do Heart Disease Dataset")
+# ---------------------------------------------------------------------------
+# Constantes
+# ---------------------------------------------------------------------------
+# Variáveis quantitativas do estudo (as mesmas analisadas na seção 8 da EDA)
+VARS_QUANT = {
+    "valor_pago": "Valor pago (R$)",
+    "valor_produtos": "Valor dos produtos (R$)",
+    "valor_frete": "Frete (R$)",
+    "n_itens": "Nº de itens",
+    "parcelas": "Parcelas",
+    "peso_total_g": "Peso total (g)",
+    "dias_entrega": "Dias até a entrega",
+    "dias_prometidos": "Prazo prometido (dias)",
+    "dias_atraso": "Dias de atraso",
+    "review_score": "Nota de avaliação",
+}
+PADRAO = ["valor_pago", "valor_frete", "peso_total_g", "dias_entrega", "dias_atraso", "review_score"]
+REGIOES = ["Sudeste", "Sul", "Centro-Oeste", "Nordeste", "Norte"]
+
+COR_PRINCIPAL = "#1f5fbf"
+COR_NO_PRAZO = "#1baf7a"
+COR_ATRASADO = "#e34948"
+CORES_SITUACAO = alt.Scale(domain=["No prazo", "Atrasado"], range=[COR_NO_PRAZO, COR_ATRASADO])
+
+
+def nome(col):
+    return VARS_QUANT.get(col, col)
+
+
+def fmt(v, casas=1, sufixo=""):
+    """Número no padrão brasileiro (1.234,5)."""
+    if pd.isna(v):
+        return "–"
+    numero = f"{v:,.{casas}f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    return numero + sufixo
+
 
 df = load_data()
+df["situacao_entrega"] = df["atrasado"].map({0: "No prazo", 1: "Atrasado"})
 
-# Variáveis quantitativas do estudo (mesma lista VARS_QUANT do notebook de EDA)
-VARS_QUANT = ["age", "trestbps", "chol", "thalach", "oldpeak"]
+st.title("📦 Olist · E-commerce brasileiro (2017–2018)")
+st.caption(
+    "Fonte: [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) "
+    "· ~99 mil pedidos · EDA completa em `notebooks/eda.ipynb`"
+)
 
-# Sidebar: filtros (variáveis + intervalo)
+# ---------------------------------------------------------------------------
+# Sidebar: filtros (valem para as duas abas)
+# ---------------------------------------------------------------------------
 with st.sidebar:
     st.header("Filtros")
 
     variaveis = st.multiselect(
-        "Variáveis Quantitativas",
-        options=VARS_QUANT,
-        default=VARS_QUANT,
-        help="Selecione as variáveis quantitativas que deseja analisar no dashboard.",
+        "Variáveis quantitativas",
+        options=list(VARS_QUANT),
+        default=PADRAO,
+        format_func=nome,
+        help="Variáveis usadas no mapa de calor e nos histogramas do Dashboard 1.",
     )
 
-    separar_por_classe = st.toggle(
-        "Distinguir por Classe",
+    faixa_nota = st.slider(
+        "Nota de avaliação (intervalo)",
+        min_value=1,
+        max_value=5,
+        value=(1, 5),
+        step=1,
+        help="Exclui da análise os pedidos com nota fora do intervalo. Ex.: (1, 2) mostra só clientes insatisfeitos.",
+    )
+
+    corte_outlier = st.slider(
+        "Remover outliers acima do percentil",
+        min_value=90,
+        max_value=100,
+        value=99,
+        step=1,
+        help="Dashboard 1: para cada variável selecionada, descarta pedidos acima desse percentil. 100 = não remove nada.",
+    )
+
+    regioes = st.multiselect("Região do cliente", options=REGIOES, help="Vazio = todas as regiões.")
+
+    colorir_situacao = st.toggle(
+        "Distinguir no prazo × atrasado",
         value=False,
-        help="Colore a distribuição pela classe (doenca_cardiaca: Normal ou Cardíaco).",
+        help="Colore os histogramas pela situação da entrega (só pedidos entregues).",
     )
 
-    # Um slider de intervalo para cada variável selecionada
-    intervalos = {}
+# ---------------------------------------------------------------------------
+# Aplicação dos filtros
+# ---------------------------------------------------------------------------
+# Filtros comuns às duas abas: nota e região
+df_base = df
+if faixa_nota != (1, 5):
+    df_base = df_base[df_base["review_score"].between(*faixa_nota)]
+if regioes:
+    df_base = df_base[df_base["regiao"].isin(regioes)]
+
+# Dashboard 1 também corta os outliers das variáveis selecionadas
+df_filtrado = df_base
+if corte_outlier < 100:
     for var in variaveis:
-        if pd.api.types.is_integer_dtype(df[var]):
-            minimo, maximo, passo = int(df[var].min()), int(df[var].max()), 1
-        else:
-            minimo, maximo, passo = float(df[var].min()), float(df[var].max()), 0.1
-        intervalos[var] = st.slider(
-            f"Intervalo de {var}",
-            min_value=minimo,
-            max_value=maximo,
-            value=(minimo, maximo),
-            step=passo,
-            key=f"intervalo_{var}",
-        )
+        if var == "review_score":
+            continue  # nota é discreta (1–5): o corte é feito pelo slider de nota
+        limite = df_filtrado[var].quantile(corte_outlier / 100)
+        df_filtrado = df_filtrado[df_filtrado[var].isna() | (df_filtrado[var] <= limite)]
 
-# Mantém só os pacientes dentro de todos os intervalos escolhidos
-df_filtrado = df
-for var, (inicio, fim) in intervalos.items():
-    df_filtrado = df_filtrado[df_filtrado[var].between(inicio, fim)]
+st.sidebar.caption(f"**{fmt(len(df_filtrado), 0)}** de {fmt(len(df), 0)} pedidos no Dashboard 1")
 
-st.caption(f"{len(df_filtrado)} de {len(df)} pacientes dentro dos intervalos escolhidos.")
+aba_lab, aba_kpi = st.tabs(["🔬 Dashboard 1 · Laboratório", "🚚 Dashboard 2 · KPIs de Logística"])
 
-# Dashboard 1: correlação (heatmap) à esquerda, distribuição (histograma) à direita
-col_correlacao, col_distribuicao = st.columns([1, 1.5])
+# ---------------------------------------------------------------------------
+# Dashboard 1: laboratório de distribuição e correlação
+# ---------------------------------------------------------------------------
 
-# Cores do histograma, em tons de sangue: vermelho arterial para Cardíaco, rosa claro para Normal
-COR_NORMAL = "#f4a6a6"
-COR_CARDIACO = "#c1121f"
-COR_HISTOGRAMA = COR_CARDIACO
-CORES_CLASSE = alt.Scale(domain=["Normal", "Cardíaco"], range=[COR_NORMAL, COR_CARDIACO])
 
-# Legenda das classes em texto, para caber no espaço livre da grade de histogramas
-LEGENDA_CLASSE = (
-    f"**Classe**  \n"
-    f":color[■]{{foreground=\"{COR_NORMAL}\"}} Normal  \n"
-    f":color[■]{{foreground=\"{COR_CARDIACO}\"}} Cardíaco"
-)
-
-with col_correlacao:
-    st.subheader("Correlação (Spearman)")
-
-    if len(variaveis) < 2:
-        st.warning("Selecione pelo menos 2 variáveis para calcular a correlação.")
-    elif len(df_filtrado) < 30:
-        st.warning("Poucos pacientes nos intervalos escolhidos para calcular a correlação.")
+def histograma(dados, var, nbins, por_situacao):
+    """Histograma em Altair a partir de contagens pré-calculadas (leve mesmo com ~95 mil pedidos)."""
+    serie = dados[var].dropna()
+    if por_situacao:
+        dados = dados.dropna(subset=[var, "situacao_entrega"])
+        serie = dados[var]
+    if var == "review_score":  # variável discreta: uma barra por nota
+        bordas = np.arange(0.5, 6.5, 1.0)
     else:
-        # Matriz de correlação de Spearman das variáveis selecionadas, em formato longo (uma linha por célula)
-        corr = (
-            df_filtrado[variaveis]
-            .corr(method="spearman")
-            .rename_axis(index="var_y", columns="var_x")
-            .stack()
-            .rename("correlacao")
-            .reset_index()
-        )
-        # Só o triângulo inferior, sem a diagonal (sempre 1): a matriz é simétrica, o resto é repetição
-        ordem = {var: i for i, var in enumerate(variaveis)}
-        corr = corr[corr["var_y"].map(ordem) > corr["var_x"].map(ordem)]
+        bordas = np.histogram_bin_edges(serie, bins=nbins)
+    partes = []
+    grupos = dados.groupby("situacao_entrega")[var] if por_situacao else [("Todos", serie)]
+    for grupo, valores in grupos:
+        contagem, _ = np.histogram(valores.dropna(), bins=bordas)
+        partes.append(pd.DataFrame({"inicio": bordas[:-1], "fim": bordas[1:], "pedidos": contagem, "grupo": grupo}))
+    tabela = pd.concat(partes, ignore_index=True)
 
-        base = alt.Chart(corr).encode(
-            x=alt.X(
-                "var_x:N",
-                title=None,
-                sort=variaveis[:-1],  # a última variável só aparece nas linhas
-                axis=alt.Axis(labelAngle=0, labelFontSize=14),
-            ),
-            y=alt.Y("var_y:N", title=None, sort=variaveis[1:], axis=alt.Axis(labelFontSize=14)),  # a primeira só nas colunas
+    barras = alt.Chart(tabela).mark_bar(binSpacing=1).encode(
+        x=alt.X("inicio:Q", bin="binned", title=nome(var)),
+        x2="fim:Q",
+        y=alt.Y("pedidos:Q", title="Pedidos", stack=True),
+        tooltip=[
+            alt.Tooltip("inicio:Q", title="de", format=",.1f"),
+            alt.Tooltip("fim:Q", title="até", format=",.1f"),
+            alt.Tooltip("pedidos:Q", title="pedidos", format=","),
+        ],
+    )
+    if por_situacao:
+        barras = barras.encode(
+            color=alt.Color("grupo:N", title=None, scale=CORES_SITUACAO, legend=alt.Legend(orient="top")),
+            tooltip=[
+                alt.Tooltip("grupo:N", title="situação"),
+                alt.Tooltip("inicio:Q", title="de", format=",.1f"),
+                alt.Tooltip("fim:Q", title="até", format=",.1f"),
+                alt.Tooltip("pedidos:Q", title="pedidos", format=","),
+            ],
         )
-        heatmap = base.mark_rect().encode(
-            color=alt.Color(
-                "correlacao:Q",
-                title="Spearman",
-                scale=alt.Scale(scheme="redblue", domain=[-1, 1], reverse=True),
-                legend=alt.Legend(titleFontSize=14, labelFontSize=13),
-            ),
-            tooltip=["var_x", "var_y", alt.Tooltip("correlacao:Q", format=".2f")],
-        )
-        valores = base.mark_text(fontSize=16).encode(
-            text=alt.Text("correlacao:Q", format=".2f"),
-            color=alt.condition(
-                "abs(datum.correlacao) > 0.5", alt.value("white"), alt.value("black")
-            ),
-        )
-
-        st.altair_chart(
-            (heatmap + valores).properties(height=380),
-            width="stretch",
-            alt="Mapa de calor (triângulo inferior, sem a diagonal) da correlação de Spearman entre as variáveis quantitativas selecionadas",
-        )
-
-with col_distribuicao:
-    st.subheader("Distribuição")
-
-    if not variaveis:
-        st.warning("Selecione pelo menos 1 variável para ver a distribuição.")
-    elif df_filtrado.empty:
-        st.warning("Nenhum paciente dentro dos intervalos escolhidos.")
     else:
-        # Com número par de variáveis não sobra espaço na grade: a legenda vai acima dela
-        if separar_por_classe and len(variaveis) % 2 == 0:
-            st.markdown(LEGENDA_CLASSE)
+        barras = barras.mark_bar(binSpacing=1, color=COR_PRINCIPAL)
 
-        # Um histograma por variável selecionada, em grade de 2 colunas (cada um com a sua escala)
-        for inicio in range(0, len(variaveis), 2):
-            colunas = st.columns(2)
-            for coluna, var in zip(colunas, variaveis[inicio : inicio + 2]):
-                histograma = (
-                    alt.Chart(df_filtrado[[var, "doenca_cardiaca"]])
-                    .mark_bar()
-                    .encode(
-                        x=alt.X(f"{var}:Q", bin=alt.Bin(maxbins=20), title=var),
-                        y=alt.Y("count()", title="Pacientes"),
-                        tooltip=[alt.Tooltip("count()", title="Pacientes")],
-                    )
-                    .properties(height=200)
+    media = alt.Chart(pd.DataFrame({"x": [serie.mean()], "rotulo": [f"média {fmt(serie.mean())}"]})).mark_rule(
+        strokeDash=[5, 4], color="#333333"
+    ).encode(x="x:Q", tooltip=alt.Tooltip("rotulo:N", title="média"))
+
+    return (barras + media).properties(title=nome(var), height=230)
+
+
+with aba_lab:
+    st.subheader("Laboratório de distribuição e correlação")
+    st.caption(
+        f"{fmt(len(df_filtrado), 0)} de {fmt(len(df), 0)} pedidos dentro dos filtros · "
+        f"nota entre {faixa_nota[0]} e {faixa_nota[1]} · "
+        + (f"outliers acima do p{corte_outlier} removidos" if corte_outlier < 100 else "sem corte de outliers")
+    )
+
+    if df_filtrado.empty:
+        st.warning("Nenhum pedido com esses filtros. Amplie o intervalo de nota ou as regiões.")
+    elif not variaveis:
+        st.info("Selecione pelo menos uma variável na barra lateral.")
+    else:
+        col_correlacao, col_distribuicao = st.columns([1, 1.4], gap="large")
+
+        with col_correlacao:
+            st.markdown("#### Correlação")
+            if len(variaveis) < 2:
+                st.warning("Selecione pelo menos 2 variáveis para calcular a correlação.")
+            else:
+                metodo = st.radio(
+                    "Método",
+                    ["pearson", "spearman"],
+                    horizontal=True,
+                    format_func=lambda m: {"pearson": "Pearson (linear)", "spearman": "Spearman (ordem)"}[m],
+                    help="Spearman é mais robusto a outliers e a relações não lineares.",
                 )
-                if separar_por_classe:
-                    histograma = histograma.encode(
-                        color=alt.Color(
-                            "doenca_cardiaca:N",
-                            title="Classe",
-                            scale=CORES_CLASSE,
-                            legend=None,
-                        ),
-                        tooltip=["doenca_cardiaca", alt.Tooltip("count()", title="Pacientes")],
-                    )
-                else:
-                    histograma = histograma.mark_bar(color=COR_HISTOGRAMA)
+                rotulos = [nome(v) for v in variaveis]
+                corr = (
+                    df_filtrado[variaveis]
+                    .corr(method=metodo)
+                    .rename(index=nome, columns=nome)
+                    .rename_axis(index="var_y", columns="var_x")
+                    .stack()
+                    .rename("correlacao")
+                    .reset_index()
+                )
+                # Só o triângulo inferior, sem a diagonal: a matriz é simétrica e a diagonal é sempre 1
+                ordem = {r: i for i, r in enumerate(rotulos)}
+                corr = corr[corr["var_y"].map(ordem) > corr["var_x"].map(ordem)]
 
-                with coluna:
-                    st.altair_chart(histograma, width="stretch", alt=f"Histograma da variável {var}")
+                base = alt.Chart(corr).encode(
+                    x=alt.X("var_x:N", title=None, sort=rotulos[:-1], axis=alt.Axis(labelAngle=-35, labelLimit=140)),
+                    y=alt.Y("var_y:N", title=None, sort=rotulos[1:], axis=alt.Axis(labelLimit=160)),
+                )
+                mapa = base.mark_rect().encode(
+                    color=alt.Color(
+                        "correlacao:Q",
+                        title="r",
+                        scale=alt.Scale(scheme="redblue", domain=[-1, 1], reverse=True),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("var_x:N", title="variável"),
+                        alt.Tooltip("var_y:N", title="× variável"),
+                        alt.Tooltip("correlacao:Q", title="correlação", format=".2f"),
+                    ],
+                )
+                valores = base.mark_text(fontSize=13).encode(
+                    text=alt.Text("correlacao:Q", format=".2f"),
+                    color=alt.condition("abs(datum.correlacao) > 0.5", alt.value("white"), alt.value("black")),
+                )
+                st.altair_chart(
+                    (mapa + valores).properties(height=420),
+                    width="stretch",
+                    alt="Mapa de calor da correlação entre as variáveis quantitativas selecionadas",
+                )
 
-            # Número ímpar de variáveis: a legenda ocupa o espaço que sobrou na última linha
-            if separar_por_classe and len(colunas) == 2 and len(variaveis[inicio : inicio + 2]) == 1:
-                colunas[1].markdown(LEGENDA_CLASSE)
+                pares = corr.assign(par=corr["var_y"] + " × " + corr["var_x"], abs_r=corr["correlacao"].abs())
+                pares = pares.sort_values("abs_r", ascending=False).head(5)
+                st.markdown("**Pares mais correlacionados**")
+                st.dataframe(
+                    pares[["par", "correlacao"]].rename(columns={"par": "Par", "correlacao": "r"}).round(2),
+                    hide_index=True,
+                    width="stretch",
+                )
 
-# TODO: Dashboard 2 — KPIs (Aula 22)
+        with col_distribuicao:
+            st.markdown("#### Distribuição")
+            nbins = st.slider("Nº de barras dos histogramas", 10, 60, 30, step=5)
+            for inicio in range(0, len(variaveis), 2):
+                colunas = st.columns(2)
+                for coluna, var in zip(colunas, variaveis[inicio : inicio + 2]):
+                    with coluna:
+                        st.altair_chart(
+                            histograma(df_filtrado, var, nbins, colorir_situacao),
+                            width="stretch",
+                            alt=f"Histograma de {nome(var)}",
+                        )
+
+        with st.expander("Estatísticas descritivas das variáveis selecionadas"):
+            desc = df_filtrado[variaveis].describe().T
+            desc.index = [nome(v) for v in desc.index]
+            st.dataframe(desc.round(2), width="stretch")
+
+        st.info(
+            "**Como ler:** a nota de avaliação tem correlação **negativa** com dias de entrega e dias de atraso: "
+            "quanto mais demora, menor a nota. Valor e frete quase não se relacionam com a nota. "
+            "Experimente o slider de nota em (1, 2) e ligue *Distinguir no prazo × atrasado*."
+        )
+
+# ---------------------------------------------------------------------------
+# Dashboard 2: KPIs para a Gerência de Logística
+# ---------------------------------------------------------------------------
+with aba_kpi:
+    st.subheader("KPIs de Logística")
+    st.info("Em construção (entrega 3).")
+    # TODO: 5 métricas (st.metric) e 3 visuais em Altair para a Gerência de Logística

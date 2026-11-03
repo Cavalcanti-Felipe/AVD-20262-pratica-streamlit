@@ -1,20 +1,20 @@
-# Configuração do Streamlit. Descomente e ajuste conforme o projeto avançar.
+# Configuração do Streamlit: identidade visual do app (azul Olist).
 # O tema pode ser trocado pelo menu ⋮ → Settings → Choose app theme.
 
 [theme]
 paddingTop = "0.0rem"     # espaço abaixo da barra do topo (valor entre aspas)
-# font = "sans serif"     # "sans serif", "serif" ou "monospace"
+font = "sans serif"       # "sans serif", "serif" ou "monospace"
 
 [theme.light]
-primaryColor = "#c1121f"            # cor de destaque (widgets, links): mesmo vermelho dos histogramas
+primaryColor = "#1f5fbf"            # cor de destaque (widgets, links): mesmo azul dos gráficos
 backgroundColor = "#ffffff"         # fundo da página
-secondaryBackgroundColor = "#f0f2f6"  # fundo da sidebar e de widgets
-textColor = "#31333f"               # cor do texto
-borderColor = "#d5dae5"
+secondaryBackgroundColor = "#eef3fb"  # fundo da sidebar e de widgets (azul bem claro)
+textColor = "#1f2933"               # cor do texto
+borderColor = "#d5dde8"
 
 [theme.dark]
-primaryColor = "#c1121f"
+primaryColor = "#5b8def"
 backgroundColor = "#0e1117"
-secondaryBackgroundColor = "#262730"
+secondaryBackgroundColor = "#1b2332"
 textColor = "#fafafa"
-borderColor = "#41444e"
+borderColor = "#3a4456"
