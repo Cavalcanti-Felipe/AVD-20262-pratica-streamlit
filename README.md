@@ -1,5 +1,5 @@
 # AVD-20262-pratica-streamlit
-
+https://avd-20262-pratica-app-fndmg3phhfbrsssilf27kx.streamlit.app/
 
 Repositório utilizado para aula prática relacionada a Streamlit na disciplina Análise e Visualização de Dados da Cesar School no período de 2026.2.
 
