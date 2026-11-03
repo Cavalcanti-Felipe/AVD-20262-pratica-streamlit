@@ -7,7 +7,6 @@ from src.data_loader import load_data
 
 st.set_page_config(
     page_title="Olist · Distribuição, Correlação e KPIs de Logística",
-    page_icon="📦",
     layout="wide",
 )
 
@@ -51,7 +50,7 @@ def fmt(v, casas=1, sufixo=""):
 df = load_data()
 df["situacao_entrega"] = df["atrasado"].map({0: "No prazo", 1: "Atrasado"})
 
-st.title("📦 Olist · E-commerce brasileiro (2017–2018)")
+st.title("Olist · E-commerce brasileiro (2017–2018)")
 st.caption(
     "Fonte: [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce) "
     "· ~99 mil pedidos · EDA completa em `notebooks/eda.ipynb`"
@@ -118,7 +117,7 @@ if corte_outlier < 100:
 
 st.sidebar.caption(f"**{fmt(len(df_filtrado), 0)}** de {fmt(len(df), 0)} pedidos no Dashboard 1")
 
-aba_lab, aba_kpi = st.tabs(["🔬 Dashboard 1 · Laboratório", "🚚 Dashboard 2 · KPIs de Logística"])
+aba_lab, aba_kpi = st.tabs([" Dashboard 1 · Laboratório", " Dashboard 2 · KPIs de Logística"])
 
 # ---------------------------------------------------------------------------
 # Dashboard 1: laboratório de distribuição e correlação
